@@ -1,11 +1,11 @@
 ---
-title: I'm Standing - API
+title: ReTrip - API
 emoji: 🤖
 colorFrom: indigo
 colorTo: gray
 sdk: docker
 pinned: false
 license: mit
-short_description: 臺北服務通
+short_description: 觀光盃黑克松
 python_version: 3.11
 ---
