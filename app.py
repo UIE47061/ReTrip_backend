@@ -7,15 +7,17 @@ from fastapi.openapi.utils import get_openapi
 from util.config import Env  # 確保環境變數被載入
 import secrets
 
+import router.attractions as attraction_router
+
 # 初始化 HTTPBasic 認證
 security = HTTPBasic()
 
 app = FastAPI(
     title="ReTrip API",
     description="[ReTrip] - API docs",
-    docs_url=None,  # 停用預設的 docs
-    redoc_url=None,  # 停用預設的 redoc
-    openapi_url=None  # 停用預設的 openapi.json
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None
 )
 
 # 從環境變數讀取 /docs 帳密
@@ -64,6 +66,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(attraction_router.router)
 
 @app.get("/")
 def root():
