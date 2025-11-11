@@ -7,7 +7,11 @@ from fastapi.openapi.utils import get_openapi
 from util.config import Env  # 確保環境變數被載入
 import secrets
 
-import router.attractions as attraction_router
+# import router.attractions as attraction_router
+from router import(
+    attractions as attraction_router, 
+    itineraries as itinerary_router
+)
 
 # 初始化 HTTPBasic 認證
 security = HTTPBasic()
@@ -68,6 +72,7 @@ app.add_middleware(
 )
 
 app.include_router(attraction_router.router)
+app.include_router(itinerary_router.router)
 
 @app.get("/")
 def root():
