@@ -15,7 +15,7 @@ router = APIRouter(tags=["Attractions API"])
 async def get_random_attraction_route(city: str):
     """
     根據城市名稱，隨機回傳一個景點的詳細資訊。
-    - **city**: (必要) 城市名稱，例如 "台北市"。
+    - **city**: (必要) 城市名稱，("臺"要大寫)，例如 "臺北市", "臺中市", "臺南市"。
     """
     response = get_random_attraction_from_city(city_name=city)
     
