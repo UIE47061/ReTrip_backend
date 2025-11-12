@@ -106,6 +106,16 @@ def get_attraction_details(attraction_id: str):
     return supabase.table('attractions').select('*').eq('id', attraction_id).single().execute()
 
 
+def get_multiple_attractions_details(attraction_ids: list[str]):
+    """
+    取得多個景點的詳細資訊。
+    接收一個景點 ID 列表，回傳所有匹配的景點資料。
+    """
+    if not attraction_ids:
+        return supabase.table('attractions').select('*').in_('id', []).execute()
+    return supabase.table('attractions').select('*').in_('id', attraction_ids).execute()
+
+
 def get_latest_attractions_paginated(limit: int, offset: int):
     """
     輔助函式：取得最新的景點，並支援分頁。
@@ -162,3 +172,25 @@ def delete_user_itinerary(user_id: str, itinerary_id: int):
         'id': itinerary_id,
         'user_id': user_id
     }).execute()
+
+# ===================================================================
+# == 使用者收藏景點 (Favorites) - 新增與刪除
+# ===================================================================
+
+def add_favorite(user_id: str, attraction_id: str):
+    """為指定使用者新增一個收藏景點"""
+    return supabase.table('user_favorites').insert({
+        'user_id': user_id,
+        'attraction_id': attraction_id
+    }).execute()
+
+def remove_favorite(user_id: str, attraction_id: str):
+    """移除指定使用者的收藏景點"""
+    return supabase.table('user_favorites').delete().match({
+        'user_id': user_id,
+        'attraction_id': attraction_id
+    }).execute()
+
+def get_user_favorites(user_id: str):
+    """取得指定使用者的所有收藏景點"""
+    return supabase.table('user_favorites').select('*').eq('user_id', user_id).execute()
