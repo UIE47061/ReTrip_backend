@@ -45,7 +45,9 @@ async def search_with_gemini_candidates(user_message: str) -> dict:
     {{"attractions":[{{"name":"...","city":"...","town":"...","main_image_url":"..."}}, ...]}}
     - 所有文字請使用繁體中文。
     - 如果某個欄位找不到資料，請填空字串("")。
-    - 陣列長度最多 5，至少 0。
+    - 陣列長度最多 5，至少 1。
+
+    描述如果是高高的塔根紅色的樹 => "無極真元天壇(天元宮)"
 
     使用者描述：""" + user_message + """
     """
