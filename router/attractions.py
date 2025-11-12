@@ -66,3 +66,35 @@ async def get_multiple_attractions_route(ids: List[str] = Query(..., description
     
     response = get_multiple_attractions_details(attraction_ids=ids)
     return response.data
+
+
+@router.get("/batch/coords", summary="5. 批量取得多個景點的經緯度")
+async def get_multiple_attractions_coords(ids: List[str] = Query(..., description="景點 ID 列表")):
+    """
+    批量取得多個景點的經緯度。
+    - **ids**: (必要) 景點 ID 列表，例如: ?ids=id1&ids=id2&ids=id3
+
+    回傳會依照前端傳入的 id 順序回傳，每個項目格式：{"id": "...", "latitude": 25.0, "longitude": 121.0}
+    若找不到該 id，latitude / longitude 會回傳 null。
+    """
+    if not ids:
+        raise HTTPException(status_code=400, detail="請提供至少一個景點 ID")
+
+    response = get_multiple_attractions_details(attraction_ids=ids)
+    rows = response.data if response and response.data else []
+
+    # 建立 id -> row map
+    row_map = {str(r.get('id')): r for r in rows}
+
+    result = []
+    for _id in ids:
+        row = row_map.get(_id)
+        if row:
+            lat = row.get('latitude') if 'latitude' in row else None
+            lng = row.get('longitude') if 'longitude' in row else None
+        else:
+            lat = None
+            lng = None
+        result.append({"id": _id, "latitude": lat, "longitude": lng})
+
+    return result
