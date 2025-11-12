@@ -1,6 +1,8 @@
 # functions/geminiChatFunction.py
 
 import json
+import time
+import os
 import google.generativeai as genai
 from util.config import env
 from .supabaseFunction import find_or_create_attractions_batch
@@ -8,10 +10,24 @@ from .supabaseFunction import find_or_create_attractions_batch
 # 初始化 Gemini
 genai.configure(api_key=env.GOOGLE_API_KEY)
 generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
-chat_model = genai.GenerativeModel('gemini-pro-latest', generation_config=generation_config)
+chat_model = genai.GenerativeModel('gemini-2.5-pro', generation_config=generation_config)
 
-# 另外準備一個純文字回覆的 model（用於一般對話）
-text_model = genai.GenerativeModel('gemini-pro-latest')
+FAST_CHAT_MODEL = os.getenv('FAST_CHAT_MODEL', 'models/gemini-flash-latest')
+fast_text_model = genai.GenerativeModel(FAST_CHAT_MODEL)
+
+try:
+    if isinstance(fast_text_model, str):
+        fast_text_model = genai.GenerativeModel(fast_text_model)
+except Exception as e:
+    print(f"fast_text_model 初始化失敗，回退至 chat_model：{e}")
+    fast_text_model = chat_model
+
+# 簡單的 in-memory cache（message -> (answer, timestamp)），TTL 可由 env 控制
+CHAT_CACHE_TTL = int(os.getenv('CHAT_CACHE_TTL', '60'))
+_chat_cache: dict = {}
+
+# 簡短問候的快速回覆清單
+_greeting_set = set(['hi', 'hello', '嗨', '哈囉', '你好'])
 
 
 async def search_with_gemini_candidates(user_message: str) -> dict:
@@ -93,12 +109,36 @@ async def chat_travel_question(user_message: str) -> dict:
     回傳格式：{"answer": "..."}
     """
     try:
+        key = user_message.strip().lower()
+
+        # 快速短路：極短問候直接本地回覆，避免呼叫模型
+        if key in _greeting_set or (len(key) <= 6 and any(g in key for g in _greeting_set)):
+            return {"answer": "嗨！有什麼關於旅遊的問題我可以幫你解答的呢？"}
+
+        # 檢查快取
+        cached = _chat_cache.get(key)
+        if cached:
+            answer, ts = cached
+            if time.time() - ts < CHAT_CACHE_TTL:
+                return {"answer": answer}
+            else:
+                del _chat_cache[key]
+
         prompt = (
             "你是一位友善且實用的台灣旅遊助理。使用繁體中文，簡潔且直接回答使用者的問題。"
             + "\n使用者: " + user_message + "\n回覆:"
         )
-        resp = await text_model.generate_content_async(prompt)
+
+        # 使用較快的 model 以降低延遲
+        resp = await fast_text_model.generate_content_async(prompt)
         answer = resp.text.strip() if getattr(resp, 'text', None) is not None else str(resp)
+
+        # 存入快取
+        try:
+            _chat_cache[key] = (answer, time.time())
+        except Exception:
+            pass
+
         return {"answer": answer}
     except Exception as e:
         print(f"chat_travel_question 發生錯誤: {e}")
@@ -116,15 +156,36 @@ async def generate_attraction_tags(attraction_name: str) -> dict:
             + " 只回傳一個 JSON 物件，格式如下：{\"tags\":[\"標籤1\",\"標籤2\",\"標籤3\"]}。"
             + " 景點名稱: " + attraction_name
         )
-        # 使用已設定為 JSON 輸出的 chat_model
-        resp = await chat_model.generate_content_async(prompt)
-        data = json.loads(resp.text)
-        tags = data.get('tags', []) if isinstance(data, dict) else []
-        # 保證回傳 0..3 個 tag（若 AI 多於 3，截斷；若少於 3，保留原樣）
+        # 使用較快的 model 產生 tags（較不需要 pro model）
+        model_to_use = fast_text_model if hasattr(fast_text_model, 'generate_content_async') else chat_model
+        resp = await model_to_use.generate_content_async(prompt)
+        text = getattr(resp, 'text', '') or str(resp)
+
+        # 嘗試解析 JSON；若失敗，嘗試用簡單分隔符號擷取
+        tags = []
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                tags = data.get('tags', [])
+        except Exception:
+            # 非 JSON 回傳，嘗試以逗號或換行分隔並取前 3 個
+            cleaned = text.strip().strip('"')
+            if ',' in cleaned:
+                tags = [t.strip() for t in cleaned.split(',') if t.strip()][:3]
+            else:
+                lines = [l.strip() for l in cleaned.splitlines() if l.strip()]
+                if lines:
+                    if len(lines) == 1 and ':' in lines[0]:
+                        parts = lines[0].split(':', 1)[1]
+                        tags = [t.strip() for t in parts.replace(';', ',').split(',') if t.strip()][:3]
+                    else:
+                        tags = lines[:3]
+
         if isinstance(tags, list):
             tags = [str(t).strip() for t in tags][:3]
         else:
             tags = []
+
         return {"tags": tags}
     except Exception as e:
         print(f"generate_attraction_tags 發生錯誤: {e}")
