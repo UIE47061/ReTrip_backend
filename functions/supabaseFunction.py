@@ -104,6 +104,34 @@ def get_random_attraction_from_city(city_name: str):
     return supabase.rpc('get_random_attraction_by_city', {'target_city': city_name}).execute()
 
 
+def get_random_attraction_with_image_from_city(city_name: str):
+    """
+    從指定城市中隨機取得一個有圖片（main_image_url 非空）的景點。
+    實作方式：先抓出符合條件的 id 列表，再在 Python 端隨機選一個 id，最後回傳該景點的完整資料。
+    如果沒有符合條件的景點，回傳一個空的 response 物件（含 .data = []），以便上層路由處理 404。
+    """
+    try:
+        # 先從 DB 取得該 city 的 id 與 main_image_url，之後在 Python 端過濾出有圖片的項目
+        resp = supabase.table('attractions').select('id, main_image_url').eq('city', city_name).execute()
+        ids = [r.get('id') for r in (resp.data or []) if r.get('id') and r.get('main_image_url')]
+
+        if not ids:
+            class EmptyResp:
+                data = []
+            return EmptyResp()
+
+        import random
+        chosen_id = str(random.choice(ids))
+
+        detail = supabase.table('attractions').select('*').eq('id', chosen_id).limit(1).execute()
+        return detail
+    except Exception as e:
+        print(f"get_random_attraction_with_image_from_city 發生錯誤: {e}")
+        class EmptyResp:
+            data = []
+        return EmptyResp()
+
+
 def get_popular_attractions(limit: int, offset: int):
     """
     從 popular_attractions_view 取得熱門景點，並支援分頁。

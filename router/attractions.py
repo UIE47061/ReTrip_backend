@@ -5,6 +5,7 @@ from typing import List
 
 from functions.supabaseFunction import (
     get_random_attraction_from_city,
+    get_random_attraction_with_image_from_city,
     get_popular_attractions,
     get_attraction_details,
     get_multiple_attractions_details,
@@ -19,14 +20,15 @@ async def get_random_attraction_route(city: str):
     根據城市名稱，隨機回傳一個景點的詳細資訊。
     - **city**: (必要) 城市名稱，("臺"要大寫)，例如 "臺北市", "臺中市", "臺南市"。
     """
-    response = get_random_attraction_from_city(city_name=city)
-    
+    # 只回傳有圖片的景點：呼叫專用 helper
+    response = get_random_attraction_with_image_from_city(city_name=city)
+
     if not response.data:
         raise HTTPException(
-            status_code=404, 
-            detail=f"在 '{city}' 中找不到任何景點"
+            status_code=404,
+            detail=f"在 '{city}' 中找不到有圖片的景點"
         )
-        
+
     return response.data[0]
 
 
