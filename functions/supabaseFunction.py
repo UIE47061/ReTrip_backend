@@ -10,14 +10,12 @@ supabase: Client = create_client(env.SUPABASE_URL, env.SUPABASE_KEY)
 # ===================================================================
 # == 使用 Gemini 進行語意搜尋的景點功能
 # ===================================================================
-def semantic_search_attractions(query_text: str):
+def semantic_search_attractions(query_text: str) -> list[dict]: # <-- 明確回傳類型
     """
-    【Gemini 要使用的工具】
-    接收一段自然語言描述，將其轉換為 embedding，
-    並在資料庫中尋找語意最相似的景點。
+    接收一段自然語言描述，轉換為 embedding，並在資料庫中尋找語意最相似的景點。
     """
     try:
-        # 1. 將使用者的查詢文字轉換成 embedding
+        # 1. 將查詢文字轉換為 embedding
         result = genai.embed_content(
             model="models/text-embedding-004",
             content=query_text,
@@ -25,16 +23,17 @@ def semantic_search_attractions(query_text: str):
         )
         query_embedding = result['embedding']
 
-        # 2. 呼叫我們在 Supabase 建立的 match_attractions 函式
+        # 2. 呼叫資料庫函式
         matches = supabase.rpc('match_attractions', {
             'query_embedding': query_embedding,
-            'match_threshold': 0.7,  # 相似度門檻，可調整
-            'match_count': 5         # 最多回傳 5 個結果
+            'match_threshold': 0.5,  # 可以適當放寬門檻，讓更多結果進來
+            'match_count': 5         # 固定回傳 5 個
         }).execute()
 
-        return matches.data
+        return matches.data if matches.data else [] # 確保總是回傳一個列表
     except Exception as e:
-        return f"搜尋時發生錯誤: {e}"
+        print(f"語意搜尋時發生錯誤: {e}")
+        return [] # 發生錯誤時回傳空列表
     
 # --- Google 搜尋工具函式 ---
 def google_search_for_attraction(query_text: str):

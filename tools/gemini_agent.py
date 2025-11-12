@@ -1,6 +1,8 @@
 # gemini_agent.py
-
-
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from util.config import env # 使用您專案的配置方式
 import google.generativeai as genai
 from util.config import env
 
