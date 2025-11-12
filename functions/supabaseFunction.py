@@ -7,10 +7,13 @@ import requests
 
 supabase: Client = create_client(env.SUPABASE_URL, env.SUPABASE_KEY)
 
+# 初始化 Gemini API
+genai.configure(api_key=env.GOOGLE_API_KEY)
+
 # ===================================================================
 # == 使用 Gemini 進行語意搜尋的景點功能
 # ===================================================================
-def semantic_search_attractions(query_text: str) -> list[dict]: # <-- 明確回傳類型
+def semantic_search_attractions(query_text: str) -> list[dict]:
     """
     接收一段自然語言描述，轉換為 embedding，並在資料庫中尋找語意最相似的景點。
     """
@@ -23,17 +26,33 @@ def semantic_search_attractions(query_text: str) -> list[dict]: # <-- 明確回�
         )
         query_embedding = result['embedding']
 
-        # 2. 呼叫資料庫函式
+        # 2. 呼叫資料庫函式，使用 text casting 來避免類型錯誤
         matches = supabase.rpc('match_attractions', {
             'query_embedding': query_embedding,
-            'match_threshold': 0.5,  # 可以適當放寬門檻，讓更多結果進來
+            'match_threshold': 0.3,  # 降低門檻以獲得更多結果
             'match_count': 5         # 固定回傳 5 個
         }).execute()
 
-        return matches.data if matches.data else [] # 確保總是回傳一個列表
+        # 3. 處理回傳結果，確保 id 是字串格式
+        if matches.data:
+            for item in matches.data:
+                if 'id' in item and item['id'] is not None:
+                    item['id'] = str(item['id'])
+        
+        return matches.data if matches.data else []
     except Exception as e:
         print(f"語意搜尋時發生錯誤: {e}")
-        return [] # 發生錯誤時回傳空列表
+        # 如果 RPC 失敗，嘗試直接查詢表格作為備用方案
+        try:
+            fallback = supabase.table('attractions').select('id, name, city, town, main_image_url, description').limit(5).execute()
+            if fallback.data:
+                for item in fallback.data:
+                    if 'id' in item and item['id'] is not None:
+                        item['id'] = str(item['id'])
+                return fallback.data
+        except Exception as fallback_error:
+            print(f"備用查詢也失敗: {fallback_error}")
+        return []
     
 # --- Google 搜尋工具函式 ---
 def google_search_for_attraction(query_text: str):
@@ -194,3 +213,125 @@ def remove_favorite(user_id: str, attraction_id: str):
 def get_user_favorites(user_id: str):
     """取得指定使用者的所有收藏景點"""
     return supabase.table('user_favorites').select('*').eq('user_id', user_id).execute()
+
+
+# ===================================================================
+# == 輔助：批次查找或建立景點
+# ===================================================================
+def find_or_create_attractions_batch(attraction_candidates: list[dict]) -> list[dict]:
+    """
+    接收由 AI 產生的景點候選清單 (每項包含 name, main_image_url, city, town 等欄位)，
+    對每一筆：
+      1. 嘗試以 name + city + town 查詢是否已存在（.match() / .eq()），
+      2. 若存在，回傳該筆完整資料（含 id），
+      3. 若不存在，插入新紀錄並回傳插入後的紀錄（含 id）。
+
+    回傳值：list[dict]，每項包含資料庫中的欄位（id, name, city, town, main_image_url, ...）。
+    """
+    results = []
+
+    for cand in attraction_candidates:
+        name = cand.get('name')
+        city = cand.get('city')
+        town = cand.get('town')
+        main_image_url = cand.get('main_image_url') or cand.get('image') or ''
+        description = cand.get('description') if 'description' in cand else None
+
+        # 安全檢查
+        if not name:
+            continue
+
+        try:
+            # 嘗試依照 name + city + town 去找現有紀錄
+            query = supabase.table('attractions').select('*').match({
+                'name': name,
+                'city': city,
+                'town': town
+            }).single().execute()
+
+            if query.data:
+                item = query.data
+                # 確保 id 為字串
+                if 'id' in item and item['id'] is not None:
+                    item['id'] = str(item['id'])
+                results.append(item)
+                continue
+
+            # 若不存在，插入新紀錄
+            insert_payload = {
+                'name': name,
+                'city': city,
+                'town': town,
+                'main_image_url': main_image_url
+            }
+            if description:
+                insert_payload['description'] = description
+
+            insert_resp = supabase.table('attractions').insert(insert_payload).execute()
+            if insert_resp.data:
+                new_item = insert_resp.data[0]
+                if 'id' in new_item and new_item['id'] is not None:
+                    new_item['id'] = str(new_item['id'])
+                results.append(new_item)
+            else:
+                # 若 insert 沒回傳 data，嘗試再查一次以取得 id
+                retry = supabase.table('attractions').select('*').match({
+                    'name': name,
+                    'city': city,
+                    'town': town
+                }).single().execute()
+                if retry.data:
+                    if 'id' in retry.data and retry.data['id'] is not None:
+                        retry.data['id'] = str(retry.data['id'])
+                    results.append(retry.data)
+
+        except Exception as e:
+            print(f"find_or_create 處理 {name} 時發生錯誤: {e}")
+            # 繼續處理下一筆，不讓整個批次失敗
+            continue
+
+    return results
+
+
+# ===================================================================
+# == 輔助：批次只查詢已存在的景點（不建立）
+# ===================================================================
+def find_existing_attractions_batch(attraction_candidates: list[dict]) -> list[dict]:
+    """
+    接收由 AI 產生的景點候選清單 (每項包含 name, city, town 等欄位)，
+    僅查詢是否存在於資料庫中（以 name+city+town 為匹配條件）。
+
+    回傳值：list[dict]，只包含在資料庫中找到的紀錄（含 id、name、city、town、main_image_url）。
+    """
+    results = []
+
+    for cand in attraction_candidates:
+        name = cand.get('name')
+        city = cand.get('city')
+        town = cand.get('town')
+
+        # 安全檢查
+        if not name:
+            continue
+
+        try:
+            # 使用 limit(1) 與 eq 避免 .single() 在無結果時拋出錯誤
+            query = supabase.table('attractions').select('id, name, city, town, main_image_url')
+            query = query.eq('name', name)
+            if city is not None:
+                query = query.eq('city', city)
+            if town is not None:
+                query = query.eq('town', town)
+            query = query.limit(1).execute()
+
+            if query.data and isinstance(query.data, list) and len(query.data) > 0:
+                item = query.data[0]
+                if 'id' in item and item['id'] is not None:
+                    item['id'] = str(item['id'])
+                results.append(item)
+        except Exception as e:
+            # 只在非空結果造成的情況之外印出錯誤
+            print(f"find_existing 處理 {name} 時發生錯誤: {e}")
+            continue
+
+    return results

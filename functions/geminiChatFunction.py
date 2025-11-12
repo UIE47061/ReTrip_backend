@@ -1,131 +1,131 @@
-# functions/geminiChatFunction.py (最終完整修正版)
+# functions/geminiChatFunction.py
 
 import json
-import asyncio
 import google.generativeai as genai
 from util.config import env
-from .find_or_create import find_or_create_attractions_batch
+from .supabaseFunction import find_or_create_attractions_batch
 
-# --- 初始化 ---
-from supabase import create_client, Client
-supabase: Client = create_client(env.SUPABASE_URL, env.SUPABASE_KEY)
-
+# 初始化 Gemini
 genai.configure(api_key=env.GOOGLE_API_KEY)
+generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+chat_model = genai.GenerativeModel('gemini-pro-latest', generation_config=generation_config)
 
-# 啟用 JSON 模式
-generation_config = genai.types.GenerationConfig(
-    response_mime_type="application/json"
-)
-chat_model = genai.GenerativeModel(
-    'gemini-pro-latest',
-    generation_config=generation_config
-)
+# 另外準備一個純文字回覆的 model（用於一般對話）
+text_model = genai.GenerativeModel('gemini-pro-latest')
 
-# --- 核心邏輯函式 ---
 
-async def start_new_search_session(session_id: str) -> str:
+async def search_with_gemini_candidates(user_message: str) -> dict:
     """
-    開始一個新的搜尋對話，並回傳固定的開場白。
+    讓 Gemini 直接思考並回傳最多 5 個候選景點（每項包含 name, city, town, main_image_url），
+    接著確認資料庫：若不存在則新增並回傳最終的資料庫紀錄（含 id）。
+
+    回傳格式:
+    {"attractions": [ {id, name, city, town, main_image_url}, ... ] }
     """
-    opening_message = "你想要找之前去過的那個地方嗎～ 形容一下那邊的景色吧！"
-    await asyncio.to_thread(
-        supabase.table('chat_sessions').insert({"session_id": session_id, "history": []}).execute
-    )
-    return opening_message
-
-async def search_with_structured_generation(session_id: str, user_message: str) -> dict:
-    """
-    讓 AI 根據對話，直接生成 5 個最相關景點的完整資料，並在資料庫中查找或建立它們。
-    """
-    # ▼▼▼ 這裡就是修正的部分：將 ... 替換為實際的程式碼 ▼▼▼
-    # 步驟 1: 從資料庫讀取歷史紀錄
-    result = await asyncio.to_thread(
-        supabase.table('chat_sessions').select('history').eq('session_id', session_id).single().execute
-    )
-    # ▲▲▲ 這裡就是修正的部分 ▲▲▲
-    
-    if not result.data:
-        return {"error": "找不到此對話，可能已過期或無效。"}
-
-    saved_history = result.data.get('history', [])
-    history_context = "\n".join([f"{'使用者' if msg['role'] == 'user' else 'AI'}: {msg['parts'][0]}" for msg in saved_history])
-
-    # --- 步驟 2: 定義我們期望的 JSON Schema ---
-    json_schema = {
-        "type": "object",
-        "properties": {
-            "attractions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "景點的準確中文全名"},
-                        "description": {"type": "string", "description": "一段約 50-100 字的繁體中文景點描述"},
-                        "latitude": {"type": "number", "description": "緯度座標"},
-                        "longitude": {"type": "number", "description": "經度座標"},
-                        "city": {"type": "string", "description": "景點所在的縣市，例如 '臺北市'"},
-                        "town": {"type": "string", "description": "景點所在的鄉鎮市區，例如 '信義區'"},
-                        "main_image_url": {"type": "string", "description": "一張代表性圖片的公開 URL。如果找不到，請留空字串。"}
-                    },
-                    "required": ["name", "description", "latitude", "longitude", "city", "town"]
-                }
-            }
-        },
-        "required": ["attractions"]
-    }
-
-    # --- 步驟 3: 建構 Prompt ---
+    # Prompt 要求：只回傳 JSON，並使用繁體中文
     prompt = f"""
-    # 角色
-    你是一位資料庫工程師，專長是從非結構化資訊中提取資料並填入資料庫。
+    請你扮演一位資深旅遊專家與地理資料檢索員，根據使用者的描述直接列出最多 5 個最可能的台灣景點候選。
+    請只回傳一個 JSON 物件，格式如下：
+    {{"attractions":[{{"name":"...","city":"...","town":"...","main_image_url":"..."}}, ...]}}
+    - 所有文字請使用繁體中文。
+    - 如果某個欄位找不到資料，請填空字串("")。
+    - 陣列長度最多 5，至少 0。
 
-    # 任務
-    根據以下對話歷史和使用者最新的問題，找出 5 個最有可能的台灣景點，並為每一個景點生成一份符合指定 JSON Schema 的完整資料。
-
-    # 對話歷史
-    {history_context}
-
-    # 使用者最新問題
-    {user_message}
-
-    # 規則
-    - 你的回答必須是、也只能是一個完全符合以下 JSON Schema 的 JSON 物件。
-    - 所有欄位的內容都必須基於你龐大的內部知識庫進行填充。
-    - 所有文字都必須是繁體中文。
-    - 如果某些資訊（例如 main_image_url）找不到，請填寫 null 或空字串。
-
-    # JSON Schema 範本:
-    {json.dumps(json_schema, ensure_ascii=False, indent=2)}
-
-    # 你的 JSON 回覆:
+    使用者描述：""" + user_message + """
     """
-    
-    print("正在請求 Gemini 進行結構化資料生成...")
+
     try:
         response = await chat_model.generate_content_async(prompt)
-        generated_data = json.loads(response.text)
-        guessed_attractions = generated_data.get("attractions", [])
-        
-        if not isinstance(guessed_attractions, list):
-            raise ValueError("AI 回應的 attractions 不是一個列表")
-            
-        print(f"AI 成功生成 {len(guessed_attractions)} 筆結構化資料。")
-    except (json.JSONDecodeError, ValueError, Exception) as e:
-        print(f"解析或生成 AI 回應時失敗: {e}")
-        return {"error": "AI 回應格式不正確或發生內部錯誤，請稍後再試。"}
+        generated_text = response.text
+        # 解析 JSON
+        data = json.loads(generated_text)
+        candidates = data.get('attractions', [])
 
-    # 步驟 4: 批次處理函式
-    attraction_data_list = await find_or_create_attractions_batch(guessed_attractions)
+        # 驗證資料形狀
+        if not isinstance(candidates, list):
+            return {"error": "AI 回傳格式不正確 (attractions 不是列表)"}
 
-    # 步驟 5: 更新對話歷史
-    new_user_part = {'role': 'user', 'parts': [{'text': user_message}]}
-    names_for_history = [attr.get('name', '未知景點') for attr in guessed_attractions]
-    new_model_part = {'role': 'model', 'parts': [{'text': f"根據你的描述，我找到了這些可能的景點: {', '.join(names_for_history)}"}]}
-    saved_history.extend([new_user_part, new_model_part])
-    
-    await asyncio.to_thread(
-        supabase.table('chat_sessions').update({"history": saved_history}).eq('session_id', session_id).execute
-    )
-    
-    # 步驟 6: 回傳最終結果
-    return {"attractions": attraction_data_list}
+        # 只保留必要欄位並標準化鍵名
+        normalized = []
+        for c in candidates[:5]:
+            if not isinstance(c, dict):
+                continue
+            normalized.append({
+                'name': c.get('name','').strip(),
+                'city': c.get('city','').strip(),
+                'town': c.get('town','').strip(),
+                'main_image_url': c.get('main_image_url','').strip()
+            })
+
+        if not normalized:
+            return {"attractions": [], "message": "AI 未回傳候選景點。"}
+
+        # 呼叫批次查詢（僅查詢已存在的景點，不建立新紀錄）
+        from .supabaseFunction import find_existing_attractions_batch
+        db_results = find_existing_attractions_batch(normalized)
+
+        # 建立 lookup map 以便依候選順序回傳 ids
+        lookup = {}
+        for r in db_results:
+            key = ( (r.get('name') or '').strip().lower(), (r.get('city') or '').strip().lower(), (r.get('town') or '').strip().lower() )
+            lookup[key] = r
+
+        ids = []
+        for cand in normalized:
+            key = ( (cand.get('name') or '').strip().lower(), (cand.get('city') or '').strip().lower(), (cand.get('town') or '').strip().lower() )
+            found = lookup.get(key)
+            if found and found.get('id') is not None:
+                ids.append(str(found.get('id')))
+            else:
+                # 如果找不到，回傳空字串以保留位置 (前端可辨識為未命中)
+                ids.append("")
+
+        return {"ids": ids, "found": db_results}
+
+    except Exception as e:
+        print(f"Gemini 生成或後續處理失敗: {e}")
+        return {"error": f"處理失敗: {str(e)}"}
+
+
+async def chat_travel_question(user_message: str) -> dict:
+    """
+    純 chat API：針對使用者的旅遊相關問題直接回覆一段繁體中文文字回答。
+    回傳格式：{"answer": "..."}
+    """
+    try:
+        prompt = (
+            "你是一位友善且實用的台灣旅遊助理。使用繁體中文，簡潔且直接回答使用者的問題。"
+            + "\n使用者: " + user_message + "\n回覆:"
+        )
+        resp = await text_model.generate_content_async(prompt)
+        answer = resp.text.strip() if getattr(resp, 'text', None) is not None else str(resp)
+        return {"answer": answer}
+    except Exception as e:
+        print(f"chat_travel_question 發生錯誤: {e}")
+        return {"error": str(e)}
+
+
+async def generate_attraction_tags(attraction_name: str) -> dict:
+    """
+    接收景點名稱（例如 "台北101"），回傳三個短標籤 (tags)。
+    回傳格式：{"tags": ["標籤1","標籤2","標籤3"]}
+    """
+    try:
+        prompt = (
+            "請以繁體中文，為這個台灣景點產生三個簡短、有吸引力的標籤（tag）。"
+            + " 只回傳一個 JSON 物件，格式如下：{\"tags\":[\"標籤1\",\"標籤2\",\"標籤3\"]}。"
+            + " 景點名稱: " + attraction_name
+        )
+        # 使用已設定為 JSON 輸出的 chat_model
+        resp = await chat_model.generate_content_async(prompt)
+        data = json.loads(resp.text)
+        tags = data.get('tags', []) if isinstance(data, dict) else []
+        # 保證回傳 0..3 個 tag（若 AI 多於 3，截斷；若少於 3，保留原樣）
+        if isinstance(tags, list):
+            tags = [str(t).strip() for t in tags][:3]
+        else:
+            tags = []
+        return {"tags": tags}
+    except Exception as e:
+        print(f"generate_attraction_tags 發生錯誤: {e}")
+        return {"error": str(e)}
