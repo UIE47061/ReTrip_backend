@@ -1,11 +1,13 @@
 # router/data.py
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from typing import List
 
 from functions.supabaseFunction import (
     get_random_attraction_from_city,
     get_popular_attractions,
     get_attraction_details,
+    get_multiple_attractions_details,
 )
 
 router = APIRouter(prefix="/attractions", tags=["Attractions API"])
@@ -50,4 +52,17 @@ async def get_attraction_detail_route(attraction_id: str):
     if not response.data:
          raise HTTPException(status_code=404, detail="找不到該景點")
          
+    return response.data
+
+
+@router.get("/batch/details", summary="4. 批量取得多個景點詳細資訊")
+async def get_multiple_attractions_route(ids: List[str] = Query(..., description="景點 ID 列表")):
+    """
+    批量取得多個景點的詳細資訊。
+    - **ids**: (必要) 景點 ID 列表，例如: ?ids=id1&ids=id2&ids=id3
+    """
+    if not ids:
+        raise HTTPException(status_code=400, detail="請提供至少一個景點 ID")
+    
+    response = get_multiple_attractions_details(attraction_ids=ids)
     return response.data

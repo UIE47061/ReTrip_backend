@@ -10,7 +10,9 @@ import secrets
 # import router.attractions as attraction_router
 from router import(
     attractions as attraction_router, 
-    itineraries as itinerary_router
+    itineraries as itinerary_router,
+    chat as chat_router,
+    favorites as favorites_router
 )
 
 # 初始化 HTTPBasic 認證
@@ -73,6 +75,8 @@ app.add_middleware(
 
 app.include_router(attraction_router.router)
 app.include_router(itinerary_router.router)
+app.include_router(chat_router.router)
+app.include_router(favorites_router.router)
 
 @app.get("/")
 def root():
