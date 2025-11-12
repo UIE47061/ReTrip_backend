@@ -2,9 +2,78 @@
 
 from supabase import create_client, Client
 from util.config import env
+import google.generativeai as genai
+import requests
 
 supabase: Client = create_client(env.SUPABASE_URL, env.SUPABASE_KEY)
 
+# ===================================================================
+# == 使用 Gemini 進行語意搜尋的景點功能
+# ===================================================================
+def semantic_search_attractions(query_text: str):
+    """
+    【Gemini 要使用的工具】
+    接收一段自然語言描述，將其轉換為 embedding，
+    並在資料庫中尋找語意最相似的景點。
+    """
+    try:
+        # 1. 將使用者的查詢文字轉換成 embedding
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=query_text,
+            task_type="RETRIEVAL_QUERY"
+        )
+        query_embedding = result['embedding']
+
+        # 2. 呼叫我們在 Supabase 建立的 match_attractions 函式
+        matches = supabase.rpc('match_attractions', {
+            'query_embedding': query_embedding,
+            'match_threshold': 0.7,  # 相似度門檻，可調整
+            'match_count': 5         # 最多回傳 5 個結果
+        }).execute()
+
+        return matches.data
+    except Exception as e:
+        return f"搜尋時發生錯誤: {e}"
+    
+# --- Google 搜尋工具函式 ---
+def google_search_for_attraction(query_text: str):
+    """
+    【Gemini 要使用的第二個工具】
+    當內部資料庫搜尋找不到結果，或使用者查詢非常通用時，
+    使用 Google 搜尋來尋找可能的景點或地點。
+    """
+    try:
+        GOOGLE_API_KEY = env.GOOGLE_API_KEY
+        SEARCH_ENGINE_ID = env.GOOGLE_SEARCH_ENGINE_ID
+
+        url = f"https://www.googleapis.com/customsearch/v1"
+        params = {
+            'key': GOOGLE_API_KEY,
+            'cx': SEARCH_ENGINE_ID,
+            'q': query_text,
+            'num': 5 # 只取前 5 個結果
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status() # 如果請求失敗會拋出錯誤
+        
+        search_results = response.json().get('items', [])
+        
+        # 清理並只回傳我們需要的資訊
+        cleaned_results = [
+            {
+                "title": item.get('title'),
+                "link": item.get('link'),
+                "snippet": item.get('snippet')
+            }
+            for item in search_results
+        ]
+        return cleaned_results
+
+    except Exception as e:
+        return f"Google 搜尋時發生錯誤: {e}"
+    
 # ===================================================================
 # == 甭身分驗證就能使用的景點查詢功能
 # ===================================================================
